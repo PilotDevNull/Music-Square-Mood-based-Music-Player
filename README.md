@@ -11,7 +11,9 @@ Two mood axes:
 
 Click anywhere on the square to drop a probe and build a mix from the
 nearest-sounding tracks. Drag across the square to sweep through a path of
-moods instead of a single point.
+moods instead of a single point. Scroll to zoom in and out (centered on your
+cursor), or use the +/−/reset buttons in the corner of the pad — handy once
+you've got enough tracks that points start overlapping.
 
 Everything runs locally — no files, tags, or audio ever leave your machine.
 There's no cloud lookup, no telemetry, and no internet connection required
@@ -225,6 +227,13 @@ The analyzer also pulls two things straight out of your files:
   (computed from file size ÷ duration), shown next to the title like
   `44.1 kHz · 991 kbps · FLAC`.
 
+On top of that server-side cache, the web player also caches artwork in
+your browser (via the Cache Storage API) the first time it loads each
+image, so on later visits or page reloads thumbnails come back instantly
+from your browser's own cache instead of re-fetching and popping in one by
+one. This is separate from — and in addition to — `web/art_cache/`, and
+stays entirely on your machine like everything else.
+
 The whole interface takes its color from whatever's playing: the app
 samples the album art down to a tiny canvas, averages the pixel colors, and
 derives a warm background wash plus a two-tone accent palette from it —
@@ -236,6 +245,26 @@ info — just re-run `analyze_library.py` on your library folder. Audio
 features aren't re-analyzed for already-scored tracks (they're cached), so
 this pass is much faster than the first run; it's just extracting art and
 format info.
+
+## The pad
+
+Tracks are plotted as their own album art, clipped to a small circle, so you
+can actually recognize what's what at a glance instead of staring at plain
+dots. Tracks without usable art — or whose art hasn't finished loading yet —
+fall back to a small dot colored by their mood coordinates, and upgrade to
+the real thumbnail automatically the moment it's ready (no flicker, no
+reload needed).
+
+Whatever's currently in your queue is ringed in the app's current accent
+color, with a slightly thicker ring around the track that's actually
+playing, so you can find "what's queued/playing" among everything else on
+the pad at a glance.
+
+**Zoom:** scroll to zoom in and out, centered on wherever your cursor is —
+or use the +/−/reset buttons in the corner of the pad. Picking a track from
+the queue list smoothly pans the pad to it if you're zoomed in, so you don't
+lose track of where the currently-playing track actually lives on the
+square.
 
 ## Playlist Builder
 
@@ -254,6 +283,15 @@ The transport bar's pill dock does real things:
 - **Repeat** — loops back to the start of the queue instead of stopping.
 - **Like** (heart) — saved locally in your browser (not synced anywhere),
   purely for your own reference for now.
+
+The queue list (right-hand panel) shows each track's album art too, with the
+same mood-dot fallback as the pad.
+
+**Media keys / OS controls** — play, pause, previous, and next also work
+from your keyboard's media keys, a headset's buttons, and your OS's
+lock-screen or notification media controls, via the browser's Media Session
+API. The current track's title, artist, and art show up there too, and
+scrubbing from the lock screen stays in sync with the in-app seek bar.
 
 ---
 
