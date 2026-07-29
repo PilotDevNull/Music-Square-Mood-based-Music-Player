@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Music Square</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wordmark">MUSIC<span>SQUARE</span></div>
+  <div class="libinfo" id="libinfo">connecting&hellip;</div>
+  <div class="search-wrap">
+    <input id="search" type="text" placeholder="Filter by artist or title&hellip;" autocomplete="off">
+  </div>
+
+  <button class="builder-btn" id="btn-open-builder">+ BUILD PLAYLIST</button>
+</header>
+
+<main class="layout">
+
+  <section class="pad-wrap">
+    <div class="pad-frame">
+      <div class="axis-label axis-top">JOYFUL</div>
+      <div class="axis-label axis-bottom">SAD</div>
+      <div class="axis-label axis-left">CALM</div>
+      <div class="axis-label axis-right">EXCITING</div>
+
+      <div class="quadrant-label q-tl">MELLOW</div>
+      <div class="quadrant-label q-tr">UPBEAT</div>
+      <div class="quadrant-label q-bl">MOODY</div>
+      <div class="quadrant-label q-br">INTENSE</div>
+
+      <canvas id="pad" width="900" height="900"></canvas>
+      <div class="readout" id="readout">&mdash;</div>
+    </div>
+    <p class="hint">Click to drop a probe and start a mix from that mood. Drag to sweep through a path of moods.</p>
+  </section>
+
+  <aside class="side">
+    <div class="now-playing" id="now-playing">
+      <div class="np-art-wrap">
+        <img class="np-art" id="np-art" alt="" hidden>
+        <div class="np-mono" id="np-glyph">&#9834;</div>
+      </div>
+      <div class="np-info">
+        <div class="np-title" id="np-title">Nothing playing</div>
+        <div class="np-artist" id="np-artist">Drop a probe on the square</div>
+        <div class="np-format" id="np-format"></div>
+        <div class="np-stats" id="np-stats"></div>
+      </div>
+    </div>
+
+    <div class="queue-head">
+      <span>QUEUE</span>
+      <span id="queue-count">0</span>
+    </div>
+    <div class="queue-list" id="queue-list"></div>
+  </aside>
+
+</main>
+
+<footer class="transport">
+  <div class="transport-main">
+    <button class="tbtn tbtn-round" id="btn-prev" title="Previous">&#9664;&#9664;</button>
+    <button class="tbtn tbtn-square" id="btn-play" title="Play/Pause">&#9654;</button>
+    <button class="tbtn tbtn-round" id="btn-next" title="Next">&#9654;&#9654;</button>
+
+    <div class="seek-wrap">
+      <span class="time" id="time-cur">0:00</span>
+      <input type="range" id="seek" min="0" max="1000" value="0">
+      <span class="time" id="time-dur">0:00</span>
+    </div>
+  </div>
+
+  <div class="transport-side">
+    <div class="pill-dock">
+      <button class="dock-btn" id="btn-shuffle" title="Shuffle upcoming tracks">&#8646;</button>
+      <button class="dock-btn" id="btn-repeat" title="Repeat queue">&#8635;</button>
+      <button class="dock-btn" id="btn-like" title="Like this track">&#9825;</button>
+    </div>
+
+    <div class="radius-wrap">
+      <label for="radius">MIX SIZE</label>
+      <input type="range" id="radius" min="5" max="40" value="18">
+      <span id="radius-val">18</span>
+    </div>
+
+    <div class="vol-wrap">
+      <label for="vol">VOL</label>
+      <input type="range" id="vol" min="0" max="100" value="80">
+    </div>
+  </div>
+</footer>
+
+<audio id="player" preload="auto"></audio>
+<canvas id="color-sampler" width="16" height="16" style="display:none"></canvas>
+
+<div class="modal-overlay hidden" id="builder-overlay">
+  <div class="modal">
+    <div class="modal-head">
+      <span>PLAYLIST BUILDER</span>
+      <button class="modal-close" id="builder-close">&times;</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="builder-col">
+        <label class="builder-label">Search your library</label>
+        <input id="builder-search" type="text" placeholder="Track or artist&hellip;" autocomplete="off">
+        <div class="builder-results" id="builder-results"></div>
+      </div>
+
+      <div class="builder-col">
+        <label class="builder-label">Seed tracks (<span id="seed-count">0</span>)</label>
+        <div class="builder-seeds" id="builder-seeds">
+          <div class="builder-empty">Add a few tracks you're in the mood for &mdash; the builder finds tracks that sound similar to them.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <div class="size-control">
+        <label for="builder-size">PLAYLIST SIZE</label>
+        <input type="range" id="builder-size" min="8" max="60" value="25">
+        <span id="builder-size-val">25</span>
+      </div>
+      <button class="build-btn" id="builder-build" disabled>Add seed tracks first</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
