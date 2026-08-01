@@ -1,3 +1,5 @@
+<img width="2504" height="1565" alt="Music Square Logo" src="https://github.com/user-attachments/assets/5fe6edbc-98b0-425c-b0b5-9a11a3ff870c" />
+
 # Music Square
 
 A local mood-square player for your FLAC library — like the old Samsung
