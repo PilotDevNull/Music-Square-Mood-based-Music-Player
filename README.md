@@ -1,5 +1,8 @@
 # Music Square
 
+<img width="2504" height="1565" alt="Music Square Logo" src="https://github.com/user-attachments/assets/30e76661-fac8-4721-8179-729090d811cb" />
+
+
 A local mood-square player for your music library, like the old Samsung
 TouchWiz Music Square — except it actually listens to your files instead of
 relying on genre tags.
