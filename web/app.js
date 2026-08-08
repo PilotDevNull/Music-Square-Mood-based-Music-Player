@@ -43,6 +43,280 @@
   const builderSizeVal = document.getElementById("builder-size-val");
   const builderBuildBtn = document.getElementById("builder-build");
 
+  // ---------- ambient background visualizer ----------
+  // A soft, blurred audio-reactive wash behind the whole UI - drawn on a
+  // fixed full-viewport canvas that sits below the glass panels (which then
+  // let it bloom through). Built on the Web Audio API's AnalyserNode, tapped
+  // straight off the <audio> element so it reacts to whatever's actually
+  // playing. Falls back to a slow idle shimmer when nothing's playing, or
+  // silently does nothing if Web Audio isn't available.
+  (function initBackgroundVisualizer() {
+    const bgCanvas = document.getElementById("bg-visualizer");
+    if (!bgCanvas) return;
+    const bgCtx = bgCanvas.getContext("2d");
+    const padEl = document.getElementById("pad");
+
+    let audioCtx, analyser, dataArray, bufferLength, sourceNode;
+    const HALF_POINTS = 26; // mirrored left/right -> 51 sample points total
+
+    function resize() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      bgCanvas.width = Math.round(window.innerWidth * dpr);
+      bgCanvas.height = Math.round(window.innerHeight * dpr);
+      bgCanvas.style.width = window.innerWidth + "px";
+      bgCanvas.style.height = window.innerHeight + "px";
+      bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    window.addEventListener("resize", resize);
+    resize();
+
+    // Anchors the visualizer on the mood pad itself (rather than the
+    // viewport center), so the glow reads as radiating from the square
+    // people are actually interacting with. Falls back to the viewport
+    // center if the pad isn't in the DOM for some reason.
+    function padAnchor() {
+      if (!padEl) {
+        return { cx: window.innerWidth / 2, cy: window.innerHeight / 2, span: Math.min(window.innerWidth, window.innerHeight) };
+      }
+      const r = padEl.getBoundingClientRect();
+      return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, span: Math.max(r.width, r.height) };
+    }
+
+    // The Web Audio graph can only be built after a user gesture (autoplay
+    // policy) and createMediaElementSource can only ever be called once per
+    // <audio> element, so this is deliberately lazy + guarded.
+    function ensureAudioGraph() {
+      if (audioCtx) return;
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        audioCtx = new AC();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.82;
+        bufferLength = analyser.frequencyBinCount;
+        dataArray = new Uint8Array(bufferLength);
+        sourceNode = audioCtx.createMediaElementSource(player);
+        sourceNode.connect(analyser);
+        analyser.connect(audioCtx.destination);
+      } catch (e) {
+        audioCtx = null; // unsupported/blocked - visualizer just stays idle
+      }
+    }
+
+    player.addEventListener("play", () => {
+      ensureAudioGraph();
+      if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+    });
+
+    function accentColors() {
+      const cs = getComputedStyle(document.documentElement);
+      const a1 = cs.getPropertyValue("--dyn-accent").trim() || "#F3B88A";
+      const a2 = cs.getPropertyValue("--dyn-accent-2").trim() || "#B9D9A8";
+      return [a1, a2];
+    }
+
+    // Raw FFT bins are linear-frequency, so bass dominates the first few
+    // bins and everything above the low-mids reads as near-silent - which
+    // is what made the old version look like it was only lighting up on
+    // the left. This buckets bins on a log-ish curve (so highs get a fair
+    // share of the bars, not just one starved bin) and applies a rising
+    // gain curve to compensate for the naturally weaker high-frequency
+    // energy, so the spread looks even across the full width. A power
+    // curve then compresses the dynamic range - without it, the bass bin
+    // (which lands at the very center once mirrored) towers over
+    // everything else and the whole thing reads as one clustered peak
+    // instead of a spread-out spectrum.
+    function computeLevels(t) {
+      const levels = new Array(HALF_POINTS);
+      if (analyser && audioCtx && !player.paused && !player.ended) {
+        analyser.getByteFrequencyData(dataArray);
+        for (let i = 0; i < HALF_POINTS; i++) {
+          const t0 = i / HALF_POINTS;
+          const t1 = (i + 1) / HALF_POINTS;
+          const startBin = Math.floor(t0 * t0 * bufferLength);
+          const endBin = Math.max(startBin + 1, Math.floor(t1 * t1 * bufferLength));
+          let sum = 0, n = 0;
+          for (let b = startBin; b < endBin && b < bufferLength; b++) { sum += dataArray[b]; n++; }
+          const raw = n ? (sum / n) / 255 : 0;
+          const gain = 1 + t0 * 1.7; // boost highs so they're not invisible next to bass
+          const compressed = Math.pow(Math.min(1, raw * gain), 0.5);
+          levels[i] = Math.max(0.1, compressed); // floor keeps quiet bins from vanishing entirely
+        }
+        return { levels, playing: true };
+      }
+      // gentle idle shimmer so the wash never looks dead when paused
+      for (let i = 0; i < HALF_POINTS; i++) {
+        levels[i] = 0.08 + 0.07 * Math.sin(t / 1400 + i * 0.45);
+      }
+      return { levels, playing: false };
+    }
+
+    // Traces a smooth curve through a series of points (quadratic-curve
+    // midpoint smoothing) instead of connecting them with straight
+    // segments - used for the translucent waveform outline overlaid on
+    // top of the bars.
+    function smoothLineTo(c, pts) {
+      c.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length - 1; i++) {
+        const xc = (pts[i][0] + pts[i + 1][0]) / 2;
+        const yc = (pts[i][1] + pts[i + 1][1]) / 2;
+        c.quadraticCurveTo(pts[i][0], pts[i][1], xc, yc);
+      }
+      const last = pts[pts.length - 1];
+      c.lineTo(last[0], last[1]);
+    }
+
+    // 1x1 scratch canvas used purely to resolve whatever color format the
+    // live CSS custom properties happen to be in (hex or hsl()) down to an
+    // actual hue, so the rainbow sweep can be anchored to the current
+    // theme instead of a hardcoded palette.
+    const swatch = document.createElement("canvas");
+    swatch.width = 1; swatch.height = 1;
+    const swatchCtx = swatch.getContext("2d", { willReadFrequently: true });
+    function hueOf(cssColor) {
+      try {
+        swatchCtx.fillStyle = "#000";
+        swatchCtx.fillRect(0, 0, 1, 1);
+        swatchCtx.fillStyle = cssColor;
+        swatchCtx.fillRect(0, 0, 1, 1);
+        const d = swatchCtx.getImageData(0, 0, 1, 1).data;
+        return rgbToHsl(d[0], d[1], d[2])[0];
+      } catch (e) { return 200; }
+    }
+
+    // Maps a frequency index to a color: pulled straight from the current
+    // track's artwork palette when one is available, otherwise a rainbow
+    // hue-sweep anchored to the theme accent as a graceful fallback (e.g.
+    // before any art has loaded, or for art-less tracks).
+    function colorAt(i, n, colors, baseHue) {
+      if (colors && colors.length) {
+        const p = i / (n - 1);
+        const idx = Math.min(colors.length - 1, Math.floor(p * (colors.length - 1)));
+        return colors[idx];
+      }
+      const hue = baseHue + (i / (n - 1) - 0.5) * 190;
+      return `hsl(${hue} 78% 60%)`;
+    }
+
+    // Full amplitude across the inner ~two-thirds of the span, then eases
+    // down gently over the outer tips - just enough to read as a taper,
+    // not so much that the extending bits fade to nothing. Kept mild on
+    // purpose: the frequency mapping below already puts the loudest (bass)
+    // content at the center, so a steep taper on top of that was what made
+    // the whole thing read as one clustered peak instead of a spread-out
+    // spectrum.
+    function envelopeAt(i, n) {
+      const p = i / (n - 1);
+      const d = Math.abs(p - 0.5) * 2; // 0 at center, 1 at the outer tips
+      if (d <= 0.65) return 1;
+      const q = (d - 0.65) / 0.35;
+      return 1 - 0.35 * q * q;
+    }
+
+    // Mirrored spiky waveform, like a stack of thin overlapping diamonds
+    // rising/falling from the pad's center line - each one individually
+    // colored so the frequency spread reads as a real spectrum, not a
+    // solid block. Colors and blend combine into the soft plasma look
+    // once the CSS blur hits the canvas.
+    function drawSpikes(cx, cy, halfWidth, levels, amp, colors, baseHue) {
+      const n = levels.length;
+      const step = (halfWidth * 2) / (n - 1);
+      const halfBarW = step * 0.82;
+      const topPts = [], botPts = [];
+
+      // Normal alpha blending for the fills - every diamond's left/right
+      // tips converge on the center line, so additive ("lighter") blending
+      // here stacked them into one over-bright band that read as a single
+      // clustered blob instead of a spread-out spectrum. Lighter blending
+      // is still used for the glow outline below, where it belongs.
+      bgCtx.globalCompositeOperation = "source-over";
+      for (let i = 0; i < n; i++) {
+        const x = cx - halfWidth + i * step;
+        const env = envelopeAt(i, n);
+        const h = Math.max(2, levels[i] * amp * env);
+        const color = colorAt(i, n, colors, baseHue);
+
+        bgCtx.fillStyle = color;
+        bgCtx.beginPath();
+        bgCtx.moveTo(x - halfBarW, cy);
+        bgCtx.lineTo(x, cy - h);
+        bgCtx.lineTo(x + halfBarW, cy);
+        bgCtx.lineTo(x, cy + h);
+        bgCtx.closePath();
+        bgCtx.fill();
+
+        topPts.push([x, cy - h]);
+        botPts.push([x, cy + h]);
+      }
+
+      // soft glowing outline traced across the spike tips, top and bottom,
+      // using the same color spread for cohesion
+      const grad = bgCtx.createLinearGradient(cx - halfWidth, 0, cx + halfWidth, 0);
+      if (colors && colors.length) {
+        colors.forEach((c, i) => grad.addColorStop(i / (colors.length - 1), c));
+      } else {
+        for (let i = 0; i <= 10; i++) grad.addColorStop(i / 10, colorAt(i, 10, null, baseHue));
+      }
+      bgCtx.globalCompositeOperation = "lighter";
+      bgCtx.lineWidth = 2;
+      bgCtx.strokeStyle = grad;
+      bgCtx.globalAlpha *= 0.7;
+      bgCtx.beginPath();
+      smoothLineTo(bgCtx, topPts);
+      bgCtx.stroke();
+      bgCtx.beginPath();
+      smoothLineTo(bgCtx, botPts);
+      bgCtx.stroke();
+      bgCtx.globalAlpha /= 0.7;
+
+      // thin hairline through the center, like a zero-crossing axis
+      bgCtx.globalCompositeOperation = "source-over";
+      bgCtx.strokeStyle = "hsla(350 85% 65% / 0.4)";
+      bgCtx.lineWidth = 1.5;
+      bgCtx.beginPath();
+      bgCtx.moveTo(cx - halfWidth, cy);
+      bgCtx.lineTo(cx + halfWidth, cy);
+      bgCtx.stroke();
+    }
+
+    function frame(t) {
+      const W = window.innerWidth, H = window.innerHeight;
+      bgCtx.clearRect(0, 0, W, H);
+
+      const [c1] = accentColors();
+      const { levels, playing } = computeLevels(t);
+      const { cx, cy, span } = padAnchor();
+
+      // mirror the sampled levels into a full point set so the equalizer
+      // reads as symmetric outward from the pad's own center.
+      const full = new Array(levels.length * 2 - 1);
+      const mid = levels.length - 1;
+      for (let i = 0; i < levels.length; i++) {
+        full[mid + i] = levels[i];
+        full[mid - i] = levels[i];
+      }
+
+      // kept close to the pad's own footprint (not the viewport) so the
+      // whole effect reads as anchored to the square, blurring outward
+      // into the surrounding glass panels rather than washing the screen.
+      // The square's own edge sits at span/2 from center, so this reaches
+      // about half the square's length past each edge on top of that.
+      const halfWidth = span * 1.0;
+      const amp = span * 0.22;
+      const baseHue = hueOf(c1);
+
+      bgCtx.globalAlpha = playing ? 0.9 : 0.35;
+      drawSpikes(cx, cy, halfWidth, full, amp, vizPalette, baseHue);
+      bgCtx.globalCompositeOperation = "source-over";
+      bgCtx.globalAlpha = 1;
+
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  })();
+
+
   let tracks = [];           // full library
   let filterActive = false;
   let matchedIds = new Set();
@@ -63,6 +337,12 @@
   let shuffleOn = false;
   let repeatOn = false;
   let liked = new Set(JSON.parse(localStorage.getItem("musicSquareLiked") || "[]"));
+
+  // Colors sampled straight from the currently playing track's artwork,
+  // left-to-right across the image - used by the background visualizer so
+  // each frequency band gets a color that actually came from the cover,
+  // not a synthetic rainbow. Populated in playIndex() once art loads.
+  let vizPalette = null;
 
   // ---------- pad thumbnails (album art dots) ----------
   const ART_R = 8;   // pad-dot radius when a track has usable art
@@ -218,33 +498,74 @@
     return `hsl(${Math.round(h)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%)`;
   }
 
-  // Samples the now-playing album art down to a tiny canvas, averages the
-  // pixels (skipping near-black/near-white extremes so borders/backgrounds
-  // don't wash out the read), and derives a Material-You-style two-tone
-  // accent palette + dark background wash from the dominant hue.
+  // Samples the now-playing album art down to a tiny canvas and picks a
+  // saturation-weighted dominant color (rather than a flat pixel average,
+  // which tends to collapse toward a muddy gray-brown and is why the accent
+  // kept landing on the same washed-out pastel regardless of the art) - then
+  // derives a Material-You-style two-tone accent palette + dark background
+  // wash from that hue, with saturation floored and lightness tuned for a
+  // punchier, more saturated result.
   function applyDynamicTheme(imgEl) {
     try {
       const cctx = colorSampler.getContext("2d");
       cctx.drawImage(imgEl, 0, 0, 16, 16);
       const data = cctx.getImageData(0, 0, 16, 16).data;
-      let r = 0, g = 0, b = 0, n = 0;
+      let r = 0, g = 0, b = 0, wTotal = 0;
       for (let i = 0; i < data.length; i += 4) {
         const rr = data[i], gg = data[i + 1], bb = data[i + 2];
         const lum = (rr + gg + bb) / 3;
         if (lum < 12 || lum > 248) continue;
-        r += rr; g += gg; b += bb; n++;
+        const mx = Math.max(rr, gg, bb), mn = Math.min(rr, gg, bb);
+        const pxSat = mx === 0 ? 0 : (mx - mn) / mx;
+        // vivid pixels count for much more than gray/muddy ones, so the
+        // extracted hue tracks the art's actual color instead of averaging
+        // it away - a small baseline weight keeps fully-gray covers stable.
+        const weight = 0.12 + pxSat * pxSat * 3;
+        r += rr * weight; g += gg * weight; b += bb * weight; wTotal += weight;
       }
-      if (n === 0) { r = data[0]; g = data[1]; b = data[2]; n = 1; }
-      r /= n; g /= n; b /= n;
+      if (wTotal === 0) { r = data[0]; g = data[1]; b = data[2]; wTotal = 1; }
+      r /= wTotal; g /= wTotal; b /= wTotal;
 
       const [h, s] = rgbToHsl(r, g, b);
+      const boostedS = Math.max(s, 0.5); // never let a washed-out cover go pastel
       const root = document.documentElement.style;
-      root.setProperty("--dyn-bg", hslCss(h, Math.min(s * 1.05, 0.65), 0.16));
-      root.setProperty("--dyn-bg-2", hslCss(h, Math.min(s * 1.0, 0.6), 0.09));
-      root.setProperty("--dyn-accent", hslCss(h, Math.min(s + 0.25, 0.9), 0.72));
-      root.setProperty("--dyn-accent-2", hslCss((h + 150) % 360, Math.min(s * 0.75 + 0.2, 0.7), 0.68));
+      root.setProperty("--dyn-bg", hslCss(h, Math.min(boostedS * 0.9, 0.6), 0.16));
+      root.setProperty("--dyn-bg-2", hslCss(h, Math.min(boostedS * 0.85, 0.55), 0.09));
+      root.setProperty("--dyn-accent", hslCss(h, Math.min(boostedS + 0.35, 0.95), 0.62));
+      root.setProperty("--dyn-accent-2", hslCss((h + 140) % 360, Math.min(boostedS * 0.95 + 0.3, 0.92), 0.55));
     } catch (e) {
       resetDynamicTheme();
+    }
+  }
+
+  // Samples a horizontal strip across the actual album art and boosts each
+  // sample's saturation, producing a left-to-right sequence of colors that
+  // really did come from the cover (rather than a synthetic hue sweep) -
+  // this is what the background visualizer uses to color each frequency
+  // band. Falls back to null on failure so callers can use a theme-based
+  // sweep instead.
+  function extractVizPalette(imgEl, count = 20) {
+    try {
+      const cctx = colorSampler.getContext("2d");
+      cctx.drawImage(imgEl, 0, 0, 16, 16);
+      const data = cctx.getImageData(0, 0, 16, 16).data;
+      const colors = [];
+      for (let i = 0; i < count; i++) {
+        const col = Math.min(15, Math.floor((i / (count - 1)) * 15));
+        // average the column (all 16 rows) rather than one pixel, so a
+        // stray bright/dark speck doesn't throw one band off
+        let r = 0, g = 0, b = 0;
+        for (let row = 0; row < 16; row++) {
+          const idx = (row * 16 + col) * 4;
+          r += data[idx]; g += data[idx + 1]; b += data[idx + 2];
+        }
+        r /= 16; g /= 16; b /= 16;
+        const [pr, pg, pb] = popColor([r, g, b], 1.7);
+        colors.push(`rgb(${pr},${pg},${pb})`);
+      }
+      return colors;
+    } catch (e) {
+      return null;
     }
   }
 
@@ -709,8 +1030,8 @@
     if (t.art) {
       fetchArtBlobUrl(t.id, t.art).then((blobUrl) => {
         if (queue[currentIndex] !== t) return; // track changed again before this resolved
-        npArt.onload = () => applyDynamicTheme(npArt);
-        npArt.onerror = () => { npArt.hidden = true; npGlyph.style.display = "flex"; resetDynamicTheme(); };
+        npArt.onload = () => { applyDynamicTheme(npArt); vizPalette = extractVizPalette(npArt); };
+        npArt.onerror = () => { npArt.hidden = true; npGlyph.style.display = "flex"; resetDynamicTheme(); vizPalette = null; };
         npArt.src = blobUrl;
         npArt.hidden = false;
         npGlyph.style.display = "none";
@@ -719,11 +1040,13 @@
         npArt.hidden = true;
         npGlyph.style.display = "flex";
         resetDynamicTheme();
+        vizPalette = null;
       });
     } else {
       npArt.hidden = true;
       npGlyph.style.display = "flex";
       resetDynamicTheme();
+      vizPalette = null;
     }
 
     renderQueueList();
@@ -1059,6 +1382,17 @@
 
   function isSeeded(id) { return seeds.some(s => s.id === id); }
 
+  // Small art-or-monogram thumbnail for a builder row. Reuses the browser's
+  // own HTTP cache for /art_cache/ URLs - no need to route through the
+  // pad's canvas-thumbnail baking pipeline, these are plain <img> tags.
+  function builderThumbHtml(t) {
+    if (t.art) {
+      return `<img class="builder-thumb" src="${t.art}" alt="" loading="lazy">`;
+    }
+    const letter = (t.title || t.artist || "?").trim().charAt(0).toUpperCase() || "?";
+    return `<div class="builder-thumb builder-thumb-mono">${escapeHtml(letter)}</div>`;
+  }
+
   function renderBuilderResults(query) {
     const q = query.trim().toLowerCase();
     let matches;
@@ -1081,6 +1415,7 @@
       const row = document.createElement("div");
       row.className = "builder-row";
       row.innerHTML = `
+        ${builderThumbHtml(t)}
         <div class="builder-row-text">
           <div class="builder-row-title">${escapeHtml(t.title)}</div>
           <div class="builder-row-artist">${escapeHtml(t.artist)}</div>
@@ -1118,6 +1453,7 @@
         const row = document.createElement("div");
         row.className = "builder-row";
         row.innerHTML = `
+          ${builderThumbHtml(t)}
           <div class="builder-row-text">
             <div class="builder-row-title">${escapeHtml(t.title)}</div>
             <div class="builder-row-artist">${escapeHtml(t.artist)}</div>

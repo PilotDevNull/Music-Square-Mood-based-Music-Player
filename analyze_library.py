@@ -109,10 +109,22 @@ def analyze_one(path_str: str, sample_seconds: int, tid: str, art_dir_str: str, 
     art_dir = Path(art_dir_str)
     try:
         dur = librosa.get_duration(path=str(path))
-        offset = dur * 0.3 if dur > sample_seconds * 1.5 else 0.0
-        y, _sr = librosa.load(
-            str(path), sr=sr, mono=True, offset=offset, duration=min(sample_seconds, dur)
-        )
+
+        if sample_seconds <= 0:
+            y, _sr = librosa.load(
+                str(path),
+                sr=sr,
+                mono=True
+            )
+        else:
+            offset = dur * 0.3 if dur > sample_seconds * 1.5 else 0.0
+            y, _sr = librosa.load(
+                str(path),
+                sr=sr,
+                mono=True,
+                offset=offset,
+                duration=min(sample_seconds, dur)
+            )
         if y.size < sr:  # less than 1s of audio, something's wrong
             raise ValueError("clip too short / silent")
         onset_env = librosa.onset.onset_strength(y=y, sr=sr)

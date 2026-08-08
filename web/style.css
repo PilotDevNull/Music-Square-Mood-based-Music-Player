@@ -40,6 +40,22 @@ body {
   transition: background 0.7s ease;
 }
 
+#bg-visualizer {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 0;
+  pointer-events: none;
+  filter: blur(14px) saturate(1.4);
+  transition: opacity 0.6s ease;
+}
+
+.topbar, .layout, .transport, .modal-overlay {
+  position: relative;
+  z-index: 1;
+}
+
 /* ---------- topbar ---------- */
 
 .topbar {
@@ -326,6 +342,7 @@ body {
 
 .queue-list::-webkit-scrollbar { width: 6px; }
 .queue-list::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 3px; }
+.queue-list { scrollbar-width: thin; scrollbar-color: var(--hairline) transparent; }
 
 /* ---------- transport ---------- */
 
@@ -562,6 +579,9 @@ input[type="range"]::-moz-range-thumb {
   flex: 1 1 auto;
   overflow-y: auto;
 }
+.builder-results::-webkit-scrollbar, .builder-seeds::-webkit-scrollbar { width: 6px; }
+.builder-results::-webkit-scrollbar-thumb, .builder-seeds::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 3px; }
+.builder-results, .builder-seeds { scrollbar-width: thin; scrollbar-color: var(--hairline) transparent; }
 
 .builder-row {
   display: flex;
@@ -571,6 +591,25 @@ input[type="range"]::-moz-range-thumb {
   border-radius: var(--r-md);
 }
 .builder-row:hover { background: rgba(255,255,255,0.04); }
+.builder-thumb {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+.builder-thumb-mono {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--dyn-bg);
+  background: linear-gradient(135deg, var(--dyn-accent), var(--dyn-accent-2));
+  transition: background 0.7s ease;
+}
 .builder-row-text { min-width: 0; flex: 1 1 auto; }
 .builder-row-title {
   font-size: 12.5px;
