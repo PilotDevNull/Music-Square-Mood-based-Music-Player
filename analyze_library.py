@@ -1,7 +1,8 @@
 """
 Music Square analyzer.
 
-Scans a folder of FLAC files, estimates two mood coordinates per track:
+Scans a folder of audio files (mp3, m4a, flac, opus, ogg, wav), estimates
+two mood coordinates per track:
 
     x  calm (-1)  <-->  exciting (+1)      "arousal"
     y  sad  (-1)  <-->  joyful   (+1)      "valence"
@@ -15,6 +16,9 @@ Usage:
     python analyze_library.py "D:/Music"
     python analyze_library.py "D:/Music" --workers 6 --sample-seconds 60
 """
+# Note: by default the FULL track is analyzed, starting at 0s. Pass
+# --sample-seconds N to only analyze the first N seconds (also from 0s)
+# for a faster, lower-fidelity run.
 import argparse
 import hashlib
 import json
@@ -33,7 +37,7 @@ import numpy as np
 MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
 MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 
-AUDIO_EXTS = {".flac"}
+AUDIO_EXTS = {".mp3", ".m4a", ".flac", ".opus", ".ogg", ".wav"}
 
 
 def track_id(rel_path: str) -> str:
@@ -46,13 +50,17 @@ def file_signature(path: Path) -> str:
 
 
 def read_tags(path: Path):
+    """Reads title/artist/album across every supported format (MP3, M4A,
+    FLAC, OGG Vorbis/Opus, WAV) using mutagen's format-agnostic 'easy' API,
+    which normalizes tag names so we don't need per-format branches here."""
     title, artist, album = path.stem, "Unknown Artist", "Unknown Album"
     try:
-        from mutagen.flac import FLAC
-        f = FLAC(str(path))
-        title = (f.get("title", [title]) or [title])[0]
-        artist = (f.get("artist", [artist]) or [artist])[0]
-        album = (f.get("album", [album]) or [album])[0]
+        from mutagen import File as MutagenFile
+        f = MutagenFile(str(path), easy=True)
+        if f is not None and f.tags is not None:
+            title = (f.tags.get("title", [title]) or [title])[0]
+            artist = (f.tags.get("artist", [artist]) or [artist])[0]
+            album = (f.tags.get("album", [album]) or [album])[0]
     except Exception:
         pass
     return title, artist, album
@@ -66,23 +74,90 @@ COVER_FILENAMES = [
 ]
 
 
+def _art_from_flac_pictures(f):
+    """FLAC and OGG (Vorbis/Opus, via mutagen's shared picture handling)."""
+    pics = getattr(f, "pictures", None)
+    if pics:
+        pic = pics[0]
+        return pic.mime, pic.data
+    return None, None
+
+
+def _art_from_id3(f):
+    """MP3, and WAV files that carry an ID3 chunk."""
+    tags = getattr(f, "tags", None)
+    if tags is None or not hasattr(tags, "getall"):
+        return None, None
+    apics = tags.getall("APIC")
+    if apics:
+        pic = apics[0]
+        return pic.mime, pic.data
+    return None, None
+
+
+def _art_from_mp4(f):
+    """M4A (MP4 container) stores cover art in the 'covr' atom."""
+    tags = getattr(f, "tags", None)
+    if tags and "covr" in tags and tags["covr"]:
+        from mutagen.mp4 import MP4Cover
+        cov = tags["covr"][0]
+        mime = "image/png" if cov.imageformat == MP4Cover.FORMAT_PNG else "image/jpeg"
+        return mime, bytes(cov)
+    return None, None
+
+
+def _art_from_ogg_vorbis_comment(f):
+    """OGG Vorbis/Opus without native picture support in this mutagen
+    version store cover art base64-encoded in METADATA_BLOCK_PICTURE."""
+    tags = getattr(f, "tags", None)
+    if not tags:
+        return None, None
+    b64 = None
+    for key in ("metadata_block_picture", "METADATA_BLOCK_PICTURE"):
+        if key in tags and tags[key]:
+            b64 = tags[key][0]
+            break
+    if not b64:
+        return None, None
+    try:
+        import base64
+        from mutagen.flac import Picture
+        pic = Picture(base64.b64decode(b64))
+        return pic.mime, pic.data
+    except Exception:
+        return None, None
+
+
 def extract_art(path: Path, tid: str, art_dir: Path):
     """Pulls cover art for a track: first tries the picture embedded in the
-    FLAC's own tags, then falls back to a cover image file sitting in the
-    same folder (common for rips that don't embed art). Returns the cached
-    file's extension, or None if nothing was found."""
+    file's own tags (format varies: FLAC/OGG picture blocks, ID3 APIC for
+    MP3/WAV, MP4 'covr' atom for M4A), then falls back to a cover image file
+    sitting in the same folder (common for rips that don't embed art).
+    Returns the cached file's extension, or None if nothing was found."""
+    mime, blob = None, None
     try:
-        from mutagen.flac import FLAC
-        f = FLAC(str(path))
-        if f.pictures:
-            pic = f.pictures[0]
-            mime = (pic.mime or "").lower()
-            ext = "png" if "png" in mime else "jpg"
-            art_dir.mkdir(parents=True, exist_ok=True)
-            (art_dir / f"{tid}.{ext}").write_bytes(pic.data)
-            return ext
+        from mutagen import File as MutagenFile
+        f = MutagenFile(str(path))
+        if f is not None:
+            suffix = path.suffix.lower()
+            if suffix == ".flac":
+                mime, blob = _art_from_flac_pictures(f)
+            elif suffix in (".ogg", ".opus"):
+                mime, blob = _art_from_flac_pictures(f)
+                if not blob:
+                    mime, blob = _art_from_ogg_vorbis_comment(f)
+            elif suffix == ".m4a":
+                mime, blob = _art_from_mp4(f)
+            elif suffix in (".mp3", ".wav"):
+                mime, blob = _art_from_id3(f)
     except Exception:
-        pass
+        mime, blob = None, None
+
+    if blob:
+        ext = "png" if "png" in (mime or "").lower() else "jpg"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        (art_dir / f"{tid}.{ext}").write_bytes(blob)
+        return ext
 
     try:
         folder = path.parent
@@ -111,18 +186,20 @@ def analyze_one(path_str: str, sample_seconds: int, tid: str, art_dir_str: str, 
         dur = librosa.get_duration(path=str(path))
 
         if sample_seconds <= 0:
+            # Full track, analyzed from 0s.
             y, _sr = librosa.load(
                 str(path),
                 sr=sr,
                 mono=True
             )
         else:
-            offset = dur * 0.3 if dur > sample_seconds * 1.5 else 0.0
+            # First `sample_seconds` of the track, starting at 0s (no longer
+            # skips ahead into the track).
             y, _sr = librosa.load(
                 str(path),
                 sr=sr,
                 mono=True,
-                offset=offset,
+                offset=0.0,
                 duration=min(sample_seconds, dur)
             )
         if y.size < sr:  # less than 1s of audio, something's wrong
@@ -327,9 +404,13 @@ def debug_analyze_one(path_str: str, sample_seconds: int, tid: str, art_dir_str:
     dur = librosa.get_duration(path=str(path))
     step(f"duration: {dur:.2f}s")
 
-    offset = dur * 0.3 if dur > sample_seconds * 1.5 else 0.0
-    step(f"loading audio (librosa.load), offset={offset:.2f}s, duration={min(sample_seconds, dur):.2f}s...")
-    y, _sr = librosa.load(str(path), sr=sr, mono=True, offset=offset, duration=min(sample_seconds, dur))
+    load_kwargs = dict(sr=sr, mono=True)
+    if sample_seconds > 0:
+        load_kwargs.update(offset=0.0, duration=min(sample_seconds, dur))
+        step(f"loading audio (librosa.load), offset=0.00s, duration={min(sample_seconds, dur):.2f}s...")
+    else:
+        step("loading audio (librosa.load), full track from 0.00s...")
+    y, _sr = librosa.load(str(path), **load_kwargs)
     step(f"loaded {y.size} samples")
 
     if y.size < sr:
@@ -385,7 +466,9 @@ def main():
     ap.add_argument("library_dir", nargs="?", help="Folder to scan recursively for .flac files")
     ap.add_argument("--output", default="library.json", help="Output JSON path (default: library.json)")
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 4) - 1))
-    ap.add_argument("--sample-seconds", type=int, default=60, help="Seconds of audio analyzed per track")
+    ap.add_argument("--sample-seconds", type=int, default=0,
+                     help="Seconds of audio analyzed per track, starting at 0s. "
+                          "Default is 0, meaning the full track is analyzed.")
     ap.add_argument("--save-every", type=int, default=10)
     ap.add_argument("--debug-file", metavar="PATH",
                      help="Analyze exactly one file directly in this process, with no worker "
@@ -430,7 +513,8 @@ def main():
     art_dir.mkdir(parents=True, exist_ok=True)
 
     files = [p for p in root.rglob("*") if p.suffix.lower() in AUDIO_EXTS]
-    print(f"Found {len(files)} FLAC files under {root}")
+    print(f"Found {len(files)} audio files under {root} "
+          f"({', '.join(sorted(AUDIO_EXTS))})")
 
     todo = []
     for p in files:

@@ -8,18 +8,37 @@
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="is-default-theme">
 
 <canvas id="bg-visualizer"></canvas>
+<div id="bg-dim"></div>
 
 <header class="topbar">
   <div class="wordmark">MUSIC<span>SQUARE</span></div>
   <div class="libinfo" id="libinfo">connecting&hellip;</div>
   <div class="search-wrap">
     <input id="search" type="text" placeholder="Filter by artist or title&hellip;" autocomplete="off">
+    <button type="button" id="search-clear" class="search-clear" title="Clear search" aria-label="Clear search">&times;</button>
+  </div>
+
+  <div class="mood-shuffle-wrap">
+    <button class="mood-btn" id="btn-mood-shuffle" type="button">&#9673; MOOD SHUFFLE</button>
+    <div class="mood-menu hidden" id="mood-menu">
+      <button type="button" data-mood="mellow">Mellow<span>Calm &amp; joyful</span></button>
+      <button type="button" data-mood="upbeat">Upbeat<span>Exciting &amp; joyful</span></button>
+      <button type="button" data-mood="moody">Moody<span>Calm &amp; sad</span></button>
+      <button type="button" data-mood="intense">Intense<span>Exciting &amp; sad</span></button>
+    </div>
   </div>
 
   <button class="builder-btn" id="btn-open-builder">+ BUILD PLAYLIST</button>
+
+  <button class="icon-btn" id="btn-open-settings" type="button" title="Settings" aria-label="Settings">
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"></circle>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+    </svg>
+  </button>
 </header>
 
 <main class="layout">
@@ -130,6 +149,67 @@
         <span id="builder-size-val">25</span>
       </div>
       <button class="build-btn" id="builder-build" disabled>Add seed tracks first</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay hidden" id="settings-overlay">
+  <div class="modal settings-modal">
+    <div class="modal-head">
+      <span>SETTINGS</span>
+      <button class="modal-close" id="settings-close">&times;</button>
+    </div>
+
+    <div class="settings-body">
+      <div class="settings-row">
+        <div class="settings-label">
+          <span>Music square transparency</span>
+          <small>How see-through the mood pad's panel is</small>
+        </div>
+        <input type="range" id="set-pad-opacity" min="0" max="100" value="55">
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">
+          <span>Panel transparency</span>
+          <small>Topbar, sidebar &amp; queue panels</small>
+        </div>
+        <input type="range" id="set-panel-opacity" min="0" max="100" value="50">
+      </div>
+
+      <div class="settings-row">
+        <div class="settings-label">
+          <span>Background dimness</span>
+          <small>Darken the ambient wash behind everything</small>
+        </div>
+        <input type="range" id="set-bg-dim" min="0" max="80" value="0">
+      </div>
+
+      <div class="settings-row settings-row-toggle">
+        <div class="settings-label">
+          <span>Background visualizer</span>
+          <small>The blurred spectrum glow behind the app</small>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="set-viz-enabled" checked>
+          <span class="switch-track"></span>
+        </label>
+      </div>
+
+      <div class="settings-row settings-row-toggle">
+        <div class="settings-label">
+          <span>Blur track info</span>
+          <small>Blurs the title &amp; artist &mdash; hover to reveal</small>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="set-blur-np">
+          <span class="switch-track"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="modal-foot">
+      <button class="settings-reset-btn" id="set-reset" type="button">Reset to defaults</button>
     </div>
   </div>
 </div>

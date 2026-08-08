@@ -6,6 +6,9 @@
   const readout = document.getElementById("readout");
   const libinfo = document.getElementById("libinfo");
   const searchBox = document.getElementById("search");
+  const searchClear = document.getElementById("search-clear");
+  const btnMoodShuffle = document.getElementById("btn-mood-shuffle");
+  const moodMenu = document.getElementById("mood-menu");
 
   const player = document.getElementById("player");
   const btnPlay = document.getElementById("btn-play");
@@ -43,6 +46,16 @@
   const builderSizeVal = document.getElementById("builder-size-val");
   const builderBuildBtn = document.getElementById("builder-build");
 
+  const btnOpenSettings = document.getElementById("btn-open-settings");
+  const settingsOverlay = document.getElementById("settings-overlay");
+  const settingsClose = document.getElementById("settings-close");
+  const setPadOpacity = document.getElementById("set-pad-opacity");
+  const setPanelOpacity = document.getElementById("set-panel-opacity");
+  const setBgDim = document.getElementById("set-bg-dim");
+  const setVizEnabled = document.getElementById("set-viz-enabled");
+  const setBlurNp = document.getElementById("set-blur-np");
+  const setReset = document.getElementById("set-reset");
+
   // ---------- ambient background visualizer ----------
   // A soft, blurred audio-reactive wash behind the whole UI - drawn on a
   // fixed full-viewport canvas that sits below the glass panels (which then
@@ -57,7 +70,19 @@
     const padEl = document.getElementById("pad");
 
     let audioCtx, analyser, dataArray, bufferLength, sourceNode;
-    const HALF_POINTS = 26; // mirrored left/right -> 51 sample points total
+    const HALF_POINTS = 36; // mirrored left/right -> 71 sample points total
+    let vizEnabled = true;
+
+    // Exposed so the settings panel (outside this closure) can toggle the
+    // visualizer without needing access to its internals. When disabled,
+    // the canvas is simply cleared and left blank each frame - cheap to
+    // keep polling so it resumes instantly when re-enabled.
+    window.musicSquareViz = {
+      setEnabled(v) {
+        vizEnabled = !!v;
+        if (!vizEnabled) bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+      }
+    };
 
     function resize() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -140,7 +165,16 @@
           for (let b = startBin; b < endBin && b < bufferLength; b++) { sum += dataArray[b]; n++; }
           const raw = n ? (sum / n) / 255 : 0;
           const gain = 1 + t0 * 1.7; // boost highs so they're not invisible next to bass
-          const compressed = Math.pow(Math.min(1, raw * gain), 0.5);
+          const boosted = raw * gain;
+          // A hard Math.min(1, ...) clamp here meant loud tracks pushed many
+          // bins to the exact same ceiling at once, so the whole shape
+          // flattened into one plateau instead of reading as distinct
+          // peaks. This soft-knee curve saturates gently instead - it still
+          // approaches the same ceiling, but genuinely loud content keeps
+          // some separation from merely loud content rather than every bin
+          // above a fixed threshold looking identical.
+          const soft = 1 - Math.exp(-boosted * 0.85);
+          const compressed = Math.pow(soft, 0.75);
           levels[i] = Math.max(0.1, compressed); // floor keeps quiet bins from vanishing entirely
         }
         return { levels, playing: true };
@@ -283,6 +317,7 @@
     function frame(t) {
       const W = window.innerWidth, H = window.innerHeight;
       bgCtx.clearRect(0, 0, W, H);
+      if (!vizEnabled) { requestAnimationFrame(frame); return; }
 
       const [c1] = accentColors();
       const { levels, playing } = computeLevels(t);
@@ -297,16 +332,18 @@
         full[mid - i] = levels[i];
       }
 
-      // kept close to the pad's own footprint (not the viewport) so the
-      // whole effect reads as anchored to the square, blurring outward
-      // into the surrounding glass panels rather than washing the screen.
-      // The square's own edge sits at span/2 from center, so this reaches
-      // about half the square's length past each edge on top of that.
-      const halfWidth = span * 1.0;
-      const amp = span * 0.22;
+      // Previously tied 1:1 to the pad square's own width (span), which made
+      // the whole effect read as one narrow band clustered around the pad
+      // instead of a wide spread. Now scales further past the pad's own
+      // footprint, with a viewport-relative floor so it stretches out
+      // properly on wide screens too - still blurring outward into the
+      // surrounding glass panels rather than washing the full screen edge
+      // to edge.
+      const halfWidth = Math.max(span * 1.9, window.innerWidth * 0.46);
+      const amp = span * 0.34;
       const baseHue = hueOf(c1);
 
-      bgCtx.globalAlpha = playing ? 0.9 : 0.35;
+      bgCtx.globalAlpha = playing ? 0.6 : 0.35;
       drawSpikes(cx, cy, halfWidth, full, amp, vizPalette, baseHue);
       bgCtx.globalCompositeOperation = "source-over";
       bgCtx.globalAlpha = 1;
@@ -464,7 +501,7 @@
   function lerp(a, b, t) { return a + (b - a) * t; }
 
   const DEFAULT_THEME = {
-    bg: "#3B2A20", bg2: "#241811", accent: "#F3B88A", accent2: "#B9D9A8",
+    bg: "#17181C", bg2: "#0D0E10", accent: "#C7D2E2", accent2: "#9FB0C8",
   };
 
   function resetDynamicTheme() {
@@ -473,6 +510,7 @@
     root.setProperty("--dyn-bg-2", DEFAULT_THEME.bg2);
     root.setProperty("--dyn-accent", DEFAULT_THEME.accent);
     root.setProperty("--dyn-accent-2", DEFAULT_THEME.accent2);
+    document.body.classList.add("is-default-theme");
   }
 
   function rgbToHsl(r, g, b) {
@@ -510,29 +548,107 @@
       const cctx = colorSampler.getContext("2d");
       cctx.drawImage(imgEl, 0, 0, 16, 16);
       const data = cctx.getImageData(0, 0, 16, 16).data;
-      let r = 0, g = 0, b = 0, wTotal = 0;
+
+      // Bucket every colorful pixel by hue (15deg buckets) and accumulate a
+      // saturation-weighted average color per bucket. This is what lets us
+      // pick the artwork's actual top two dominant hues for the two-tone
+      // accent palette - previously accent-2 was just accent hue-rotated by
+      // a fixed +140deg, which is a synthetic complementary color that may
+      // not exist anywhere in the actual cover (e.g. a warm orange cover
+      // would invent a green accent that was never really there).
+      const BUCKETS = 24;
+      const bucketW = new Array(BUCKETS).fill(0);
+      const bucketR = new Array(BUCKETS).fill(0);
+      const bucketG = new Array(BUCKETS).fill(0);
+      const bucketB = new Array(BUCKETS).fill(0);
+      let rSum = 0, gSum = 0, bSum = 0, rCount = 0;
+      const MIN_PIXEL_SAT = 0.12;
+
       for (let i = 0; i < data.length; i += 4) {
         const rr = data[i], gg = data[i + 1], bb = data[i + 2];
         const lum = (rr + gg + bb) / 3;
         if (lum < 12 || lum > 248) continue;
+
+        rSum += rr; gSum += gg; bSum += bb; rCount++;
+
         const mx = Math.max(rr, gg, bb), mn = Math.min(rr, gg, bb);
         const pxSat = mx === 0 ? 0 : (mx - mn) / mx;
-        // vivid pixels count for much more than gray/muddy ones, so the
-        // extracted hue tracks the art's actual color instead of averaging
-        // it away - a small baseline weight keeps fully-gray covers stable.
-        const weight = 0.12 + pxSat * pxSat * 3;
-        r += rr * weight; g += gg * weight; b += bb * weight; wTotal += weight;
-      }
-      if (wTotal === 0) { r = data[0]; g = data[1]; b = data[2]; wTotal = 1; }
-      r /= wTotal; g /= wTotal; b /= wTotal;
+        if (pxSat < MIN_PIXEL_SAT) continue;
 
-      const [h, s] = rgbToHsl(r, g, b);
-      const boostedS = Math.max(s, 0.5); // never let a washed-out cover go pastel
+        const [ph] = rgbToHsl(rr, gg, bb);
+        const bIdx = Math.min(BUCKETS - 1, Math.floor(ph / (360 / BUCKETS)));
+        // Saturation is numerically noisy near black - a 1-3 value gap
+        // between channels in a pixel that reads as flat black to the eye
+        // (e.g. rgb(14,13,17)) computes as ~20% "saturated" purely from
+        // compression/dithering noise, and can otherwise out-vote pixels
+        // with genuinely visible color. Ramp each pixel's vote up from 0
+        // at the lum-exclusion floor to full strength by lum 55, so dark
+        // noise can no longer dictate the extracted hue on its own.
+        const lumConfidence = Math.pow(Math.min(1, Math.max(0, (lum - 12) / 80)), 2);
+        const weight = pxSat * pxSat * lumConfidence; // vivid pixels count for much more than borderline ones
+        bucketW[bIdx] += weight;
+        bucketR[bIdx] += rr * weight;
+        bucketG[bIdx] += gg * weight;
+        bucketB[bIdx] += bb * weight;
+      }
+
+      const totalVividWeight = bucketW.reduce((a, b) => a + b, 0);
+      const order = [...Array(BUCKETS).keys()].sort((a, b) => bucketW[b] - bucketW[a]);
+
+      let h, s, h2, s2, vivid;
+      const MIN_VIVID_WEIGHT = 0.6; // enough genuinely colorful pixels to trust a hue from them
+      if (totalVividWeight >= MIN_VIVID_WEIGHT) {
+        const i0 = order[0];
+        const primary = rgbToHsl(bucketR[i0] / bucketW[i0], bucketG[i0] / bucketW[i0], bucketB[i0] / bucketW[i0]);
+        h = primary[0];
+        s = Math.max(primary[1], 0.5); // confidently colorful art can go fully vivid
+
+        // Second color: the next-heaviest bucket that's a genuinely
+        // different hue from the first (skips near-duplicate buckets of
+        // the same dominant color), so accent-2 is a real secondary color
+        // from the art rather than a copy of the primary or an invented one.
+        let i1 = null;
+        for (const idx of order.slice(1)) {
+          if (bucketW[idx] <= 0) continue;
+          const raw = Math.abs(idx - i0);
+          const hueDist = Math.min(raw, BUCKETS - raw) * (360 / BUCKETS);
+          if (hueDist >= 25) { i1 = idx; break; }
+        }
+        if (i1 !== null) {
+          const secondary = rgbToHsl(bucketR[i1] / bucketW[i1], bucketG[i1] / bucketW[i1], bucketB[i1] / bucketW[i1]);
+          h2 = secondary[0];
+          s2 = Math.max(secondary[1], 0.45);
+        } else {
+          // Cover is essentially monochrome - reuse the primary hue rather
+          // than fabricating a rotated one.
+          h2 = h; s2 = s;
+        }
+        vivid = true;
+      } else if (rCount > 0) {
+        // Not enough real color to trust a vivid hue - use the cover's
+        // actual overall tint (even if faint) rather than a fixed default,
+        // gently capped so it stays muted instead of forced vivid. Two
+        // different near-black covers with different true casts will still
+        // land on genuinely different (if subtle) shades here.
+        const hsl = rgbToHsl(rSum / rCount, gSum / rCount, bSum / rCount);
+        h = hsl[0];
+        s = Math.min(Math.max(hsl[1], 0.1), 0.3);
+        h2 = h; s2 = s;
+        vivid = false;
+      } else {
+        resetDynamicTheme();
+        return;
+      }
+
+      const accentS = vivid ? Math.min(s + 0.35, 0.95) : Math.min(s + 0.08, 0.35);
+      const accent2S = vivid ? Math.min(s2 + 0.3, 0.92) : Math.min(s2 * 0.9 + 0.05, 0.3);
+
       const root = document.documentElement.style;
-      root.setProperty("--dyn-bg", hslCss(h, Math.min(boostedS * 0.9, 0.6), 0.16));
-      root.setProperty("--dyn-bg-2", hslCss(h, Math.min(boostedS * 0.85, 0.55), 0.09));
-      root.setProperty("--dyn-accent", hslCss(h, Math.min(boostedS + 0.35, 0.95), 0.62));
-      root.setProperty("--dyn-accent-2", hslCss((h + 140) % 360, Math.min(boostedS * 0.95 + 0.3, 0.92), 0.55));
+      root.setProperty("--dyn-bg", hslCss(h, Math.min(s * 0.9, 0.6), 0.16));
+      root.setProperty("--dyn-bg-2", hslCss(h, Math.min(s * 0.85, 0.55), 0.09));
+      root.setProperty("--dyn-accent", hslCss(h, accentS, vivid ? 0.62 : 0.55));
+      root.setProperty("--dyn-accent-2", hslCss(h2, accent2S, vivid ? 0.55 : 0.5));
+      document.body.classList.remove("is-default-theme");
     } catch (e) {
       resetDynamicTheme();
     }
@@ -560,8 +676,32 @@
           r += data[idx]; g += data[idx + 1]; b += data[idx + 2];
         }
         r /= 16; g /= 16; b /= 16;
-        const [pr, pg, pb] = popColor([r, g, b], 1.7);
-        colors.push(`rgb(${pr},${pg},${pb})`);
+
+        // Scale the saturation boost by how much real color this column
+        // actually has, rather than a flat 1.7x for every column. A
+        // vividly colored column still gets the full pop; a near-black or
+        // near-white column (where any per-channel difference is more
+        // likely compression noise than real art color) gets little to no
+        // boost, so noise can't be amplified into a false visible hue - but
+        // it isn't hard-clamped to flat gray either, so a genuinely faint
+        // tint still comes through proportionally.
+        const lum = (r + g + b) / 3;
+        const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+        const rawSat = mx === 0 ? 0 : (mx - mn) / mx;
+        const extreme = lum < 12 || lum > 248;
+        const confidence = extreme ? 0 : Math.min(1, rawSat / 0.25);
+        const amount = 1 + confidence * 0.7; // ranges 1x (no boost) .. 1.7x (full boost)
+
+        const [pr, pg, pb] = popColor([r, g, b], amount);
+
+        // The boost above only prevents noise from being amplified into a
+        // false hue - it doesn't stop a column that's genuinely near-white
+        // from being pushed to the wash as-is, which is what made a
+        // mostly-white cover read as a blinding glow rather than an ambient
+        // tint. Only cap the top end here - dark art should stay dark.
+        const [ch, cs, cl] = rgbToHsl(pr, pg, pb);
+        const clampedL = Math.min(0.6, cl);
+        colors.push(hslCss(ch, cs, clampedL));
       }
       return colors;
     } catch (e) {
@@ -616,26 +756,50 @@
     render();
   }
 
-  // Smoothly re-centers the viewport on a track's pad position, so picking a
-  // track (from the queue, etc.) while zoomed in doesn't leave you looking at
-  // an empty corner of the pad. No-op when fully zoomed out, since the whole
-  // square is already visible.
+  // Smoothly animates the viewport to a new center/zoom in one tween. Used
+  // both by panToTrack (recenter only, scale unchanged) and by the "locate
+  // now playing" button (recenter + zoom in together).
   let panAnim = null;
+  function animateView(toCx, toCy, toScale) {
+    panAnim = {
+      fromCx: viewCx, fromCy: viewCy, fromScale: viewScale,
+      toCx, toCy, toScale,
+      t0: performance.now(), dur: 400
+    };
+    requestAnimationFrame(stepPan);
+  }
+
   function panToTrack(t) {
     if (viewScale <= 1) return;
     const half = 1 / viewScale;
     const toCx = Math.min(Math.max(t.x, -1 + half), 1 - half);
     const toCy = Math.min(Math.max(t.y, -1 + half), 1 - half);
-    panAnim = { fromCx: viewCx, fromCy: viewCy, toCx, toCy, t0: performance.now(), dur: 350 };
-    requestAnimationFrame(stepPan);
+    animateView(toCx, toCy, viewScale);
+  }
+
+  // Recenters and zooms in on whatever track is currently playing, so it's
+  // easy to jump back to the action after panning/zooming away to browse.
+  // Zooms in to at least a comfortable level even if currently fully zoomed
+  // out; if already zoomed in further than that, keeps the current zoom.
+  const LOCATE_ZOOM = 5;
+  function locateNowPlaying() {
+    const t = queue[currentIndex];
+    if (!t) { showReadyToast("Nothing playing yet"); return; }
+    const targetScale = Math.min(MAX_ZOOM, Math.max(viewScale, LOCATE_ZOOM));
+    const half = 1 / targetScale;
+    const toCx = Math.min(Math.max(t.x, -1 + half), 1 - half);
+    const toCy = Math.min(Math.max(t.y, -1 + half), 1 - half);
+    animateView(toCx, toCy, targetScale);
   }
 
   function stepPan(now) {
     if (!panAnim) return;
     const p = Math.min(1, (now - panAnim.t0) / panAnim.dur);
     const e = p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2; // ease-in-out
-    viewCx = lerp(panAnim.fromCx, panAnim.toCx, e);
-    viewCy = lerp(panAnim.fromCy, panAnim.toCy, e);
+    viewScale = lerp(panAnim.fromScale, panAnim.toScale, e);
+    const half = 1 / viewScale;
+    viewCx = Math.min(Math.max(lerp(panAnim.fromCx, panAnim.toCx, e), -1 + half), 1 - half);
+    viewCy = Math.min(Math.max(lerp(panAnim.fromCy, panAnim.toCy, e), -1 + half), 1 - half);
     render();
     if (p < 1) requestAnimationFrame(stepPan); else panAnim = null;
   }
@@ -708,7 +872,7 @@
 
       const [px, py] = dataToPx(t.x, t.y);
       const dim = filterActive && !matchedIds.has(t.id);
-      const alpha = dim ? 0.14 : 0.9;
+      const alpha = dim ? 0.14 : 1;
       const thumb = artThumbs.get(t.id);
       const baseR = trackRadius(t, dim);
 
@@ -787,13 +951,47 @@
 
   function drawDragPath() {
     if (dragPath.length < 2) return;
-    ctx.strokeStyle = "rgba(237,233,225,0.35)";
-    ctx.lineWidth = 1.5;
+    const n = dragPath.length;
+
+    // Trail of bubbles behind the line - small circles with a bit of size
+    // variance, fading in from the tail (oldest point) toward the current
+    // drag position, so the sweep leaves a floaty wake instead of a bare line.
+    for (let i = 0; i < n; i++) {
+      const [x, y] = dragPath[i];
+      const [px, py] = dataToPx(x, y);
+      const t = i / (n - 1);
+      const wobble = Math.sin(i * 2.7) * 0.5 + 0.5; // organic size variance, not literally random
+      const r = 2 + wobble * 3.5;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(237,233,225,${0.06 + t * 0.18})`;
+      ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = `rgba(237,233,225,${0.15 + t * 0.35})`;
+      ctx.stroke();
+    }
+
+    // High-contrast line on top: a dark halo stroke first so it stays
+    // legible over busy, light-colored album art, then a bright core stroke.
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+
     ctx.beginPath();
     dragPath.forEach(([x, y], i) => {
       const [px, py] = dataToPx(x, y);
       if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
     });
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = 4;
+    ctx.stroke();
+
+    ctx.beginPath();
+    dragPath.forEach(([x, y], i) => {
+      const [px, py] = dataToPx(x, y);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    });
+    ctx.strokeStyle = "rgba(237,233,225,0.95)";
+    ctx.lineWidth = 1.75;
     ctx.stroke();
   }
 
@@ -958,6 +1156,60 @@
     pool.sort((a, b) => distance(a, x, y) - distance(b, x, y));
     return pool.slice(0, n);
   }
+
+  // ---------- mood shuffle ----------
+  // Mirrors the pad's own quadrant layout (see the .quadrant-label markup):
+  // x is CALM(-1) -> EXCITING(+1), y is SAD(-1) -> JOYFUL(+1).
+  const MOODS = {
+    mellow:  { xRange: [-1, 0], yRange: [0, 1] },
+    upbeat:  { xRange: [0, 1], yRange: [0, 1] },
+    moody:   { xRange: [-1, 0], yRange: [-1, 0] },
+    intense: { xRange: [0, 1], yRange: [-1, 0] },
+  };
+
+  // Picks a randomized point within the mood's quadrant (inset from the
+  // outer edges so it lands somewhere representative, not right on the
+  // pad's border) and queues the nearest tracks to it - same mechanism as
+  // clicking the pad directly, so re-picking the same mood gives a
+  // different mix each time rather than a fixed spot.
+  function moodShuffle(moodKey) {
+    const mood = MOODS[moodKey];
+    if (!mood) return;
+    const inset = 0.18;
+    const [x0, x1] = mood.xRange, [y0, y1] = mood.yRange;
+    const rx = x0 + inset + Math.random() * ((x1 - x0) - inset * 2);
+    const ry = y0 + inset + Math.random() * ((y1 - y0) - inset * 2);
+    const n = parseInt(radius.value, 10);
+    const built = nearestTracks(rx, ry, n);
+    if (!built.length) return;
+    builtActive = false;
+    probe = { x: rx, y: ry, t0: performance.now() };
+    setQueue(built);
+    panToTrack(built[0]);
+  }
+
+  function closeMoodMenu() { moodMenu.classList.add("hidden"); btnMoodShuffle.classList.remove("on"); }
+  function toggleMoodMenu() {
+    const opening = moodMenu.classList.contains("hidden");
+    moodMenu.classList.toggle("hidden", !opening);
+    btnMoodShuffle.classList.toggle("on", opening);
+  }
+
+  btnMoodShuffle.addEventListener("click", (evt) => {
+    evt.stopPropagation();
+    toggleMoodMenu();
+  });
+  moodMenu.querySelectorAll("[data-mood]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      moodShuffle(btn.dataset.mood);
+      closeMoodMenu();
+    });
+  });
+  document.addEventListener("click", (evt) => {
+    if (!moodMenu.classList.contains("hidden") && !moodMenu.contains(evt.target) && evt.target !== btnMoodShuffle) {
+      closeMoodMenu();
+    }
+  });
 
   // ---------- queue / playback ----------
 
@@ -1216,6 +1468,15 @@
     const wrap = document.createElement("div");
     wrap.className = "pad-zoom-controls";
     wrap.innerHTML = `
+      <button type="button" data-zoom="locate" title="Locate now playing">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <line x1="12" y1="2" x2="12" y2="6"></line>
+          <line x1="12" y1="18" x2="12" y2="22"></line>
+          <line x1="2" y1="12" x2="6" y2="12"></line>
+          <line x1="18" y1="12" x2="22" y2="12"></line>
+        </svg>
+      </button>
       <button type="button" data-zoom="in" title="Zoom in">+</button>
       <button type="button" data-zoom="out" title="Zoom out">&minus;</button>
       <button type="button" data-zoom="reset" title="Reset zoom">&#8634;</button>
@@ -1227,6 +1488,7 @@
     }
     parent.appendChild(wrap);
 
+    wrap.querySelector('[data-zoom="locate"]').addEventListener("click", locateNowPlaying);
     wrap.querySelector('[data-zoom="in"]').addEventListener("click", () => {
       zoomAt(canvas.width / 2, canvas.height / 2, 1.4);
     });
@@ -1341,8 +1603,8 @@
 
   // ---------- search ----------
 
-  searchBox.addEventListener("input", () => {
-    const q = searchBox.value.trim().toLowerCase();
+  function applySearch(q) {
+    q = q.trim().toLowerCase();
     if (!q) {
       filterActive = false;
       matchedIds = new Set();
@@ -1354,7 +1616,16 @@
         ).map(t => t.id)
       );
     }
+    searchClear.classList.toggle("visible", q.length > 0);
     render();
+  }
+
+  searchBox.addEventListener("input", () => applySearch(searchBox.value));
+
+  searchClear.addEventListener("click", () => {
+    searchBox.value = "";
+    applySearch("");
+    searchBox.focus();
   });
 
   // ---------- playlist builder ----------
@@ -1378,6 +1649,91 @@
   });
   window.addEventListener("keydown", (evt) => {
     if (evt.code === "Escape" && !builderOverlay.classList.contains("hidden")) closeBuilder();
+  });
+
+  // ---------- settings ----------
+  // Persisted appearance/behavior prefs, separate from "liked" tracks.
+  // Pad transparency stays on --surface (used only by .pad-frame); panel
+  // transparency uses --surface-outer (topbar search, sidebar, modals) -
+  // see the two variables set up in style.css so the two sliders never
+  // fight over the same value.
+  const SETTINGS_DEFAULTS = {
+    padOpacity: 55,    // 0-100, maps to --surface alpha
+    panelOpacity: 50,  // 0-100, maps to --surface-outer alpha
+    bgDim: 0,          // 0-80, maps to --bg-dim-alpha
+    vizEnabled: true,
+    blurNp: false,
+  };
+
+  function loadSettings() {
+    try {
+      const saved = JSON.parse(localStorage.getItem("musicSquareSettings") || "{}");
+      return { ...SETTINGS_DEFAULTS, ...saved };
+    } catch (e) { return { ...SETTINGS_DEFAULTS }; }
+  }
+
+  let settings = loadSettings();
+
+  function saveSettings() {
+    localStorage.setItem("musicSquareSettings", JSON.stringify(settings));
+  }
+
+  // Ceilings are picked so the *default* slider position (55 / 50)
+  // reproduces the exact alpha values the app already shipped with
+  // (--surface: 0.055, --surface-outer: 0.028) - so turning settings on
+  // for the first time doesn't visibly change anything until touched.
+  function applySettings() {
+    const root = document.documentElement;
+    root.style.setProperty("--surface", `rgba(255,255,255,${((settings.padOpacity / 100) * 0.1).toFixed(3)})`);
+    root.style.setProperty("--surface-outer", `rgba(255,255,255,${((settings.panelOpacity / 100) * 0.056).toFixed(3)})`);
+    root.style.setProperty("--bg-dim-alpha", (settings.bgDim / 100).toFixed(2));
+    if (window.musicSquareViz) window.musicSquareViz.setEnabled(settings.vizEnabled);
+    document.body.classList.toggle("blur-track-info", settings.blurNp);
+
+    setPadOpacity.value = settings.padOpacity;
+    setPanelOpacity.value = settings.panelOpacity;
+    setBgDim.value = settings.bgDim;
+    setVizEnabled.checked = settings.vizEnabled;
+    setBlurNp.checked = settings.blurNp;
+  }
+
+  applySettings();
+
+  setPadOpacity.addEventListener("input", () => {
+    settings.padOpacity = parseInt(setPadOpacity.value, 10);
+    applySettings(); saveSettings();
+  });
+  setPanelOpacity.addEventListener("input", () => {
+    settings.panelOpacity = parseInt(setPanelOpacity.value, 10);
+    applySettings(); saveSettings();
+  });
+  setBgDim.addEventListener("input", () => {
+    settings.bgDim = parseInt(setBgDim.value, 10);
+    applySettings(); saveSettings();
+  });
+  setVizEnabled.addEventListener("change", () => {
+    settings.vizEnabled = setVizEnabled.checked;
+    applySettings(); saveSettings();
+  });
+  setBlurNp.addEventListener("change", () => {
+    settings.blurNp = setBlurNp.checked;
+    applySettings(); saveSettings();
+  });
+  setReset.addEventListener("click", () => {
+    settings = { ...SETTINGS_DEFAULTS };
+    applySettings(); saveSettings();
+  });
+
+  function openSettings() { settingsOverlay.classList.remove("hidden"); }
+  function closeSettings() { settingsOverlay.classList.add("hidden"); }
+
+  btnOpenSettings.addEventListener("click", openSettings);
+  settingsClose.addEventListener("click", closeSettings);
+  settingsOverlay.addEventListener("click", (evt) => {
+    if (evt.target === settingsOverlay) closeSettings();
+  });
+  window.addEventListener("keydown", (evt) => {
+    if (evt.code === "Escape" && !settingsOverlay.classList.contains("hidden")) closeSettings();
   });
 
   function isSeeded(id) { return seeds.some(s => s.id === id); }
